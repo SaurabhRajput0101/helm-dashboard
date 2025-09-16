@@ -129,45 +129,69 @@ func (s *Server) itIsUs() bool {
 	return strings.HasPrefix(r.Header.Get("X-Application-Name"), "Helm Dashboard")
 }
 
-func checkUpgrade(d *objects.StatusInfo) { // TODO: check it once an hour
-	url := "https://api.github.com/repos/komodorio/helm-dashboard/releases/latest"
-	type GHRelease struct {
-		Name string `json:"name"`
-	}
+func checkUpgrade(d *objects.StatusInfo) {
+	ticker := time.NewTicker(4 * time.Hour) // Check for updates every 4 hours
 
-	var myClient = &http.Client{Timeout: 5 * time.Second}
-	r, err := myClient.Get(url)
-	if err != nil {
-		log.Warnf("Failed to check for new version: %s", err)
-		return
-	}
-	defer r.Body.Close()
+	check := func() {
+		url := "https://api.github.com/repos/komodorio/helm-dashboard/releases/latest"
+		// This struct correctly looks for "tag_name" which is more reliable than "name"
+		type GHRelease struct {
+			TagName string `json:"tag_name"`
+		}
 
-	target := new(GHRelease)
-	err = json.NewDecoder(r.Body).Decode(target)
-	if err != nil {
-		log.Warnf("Failed to decode new release version: %s", err)
-		return
-	}
-	d.LatestVer = target.Name
+		var myClient = &http.Client{Timeout: 10 * time.Second}
+		r, err := myClient.Get(url)
+		if err != nil {
+			log.Warnf("Failed to check for new version: %s", err)
+			return
+		}
+		defer r.Body.Close()
 
-	v1, err := version.NewVersion(d.CurVer)
-	if err != nil {
-		log.Warnf("Failed to parse CurVer: %s", err)
-		v1 = &version.Version{}
-	}
+		target := new(GHRelease)
+		err = json.NewDecoder(r.Body).Decode(target)
+		if err != nil {
+			log.Warnf("Failed to decode new release version: %s", err)
+			return
+		}
 
-	v2, err := version.NewVersion(d.LatestVer)
-	if err != nil {
-		log.Warnf("Failed to parse RepoLatestVer: %s", err)
-	} else {
-		if v1.LessThan(v2) {
-			log.Warnf("Newer Helm Dashboard version is available: %s", d.LatestVer)
-			log.Warnf("Upgrade instructions: https://github.com/komodorio/helm-dashboard#installing")
+		if target.TagName == "" {
+			log.Warnf("Got empty tag name from GitHub API")
+			return
+		}
+
+		d.LatestVer = target.TagName
+
+		// Use the existing version library to compare
+		v1, err := version.NewVersion(d.CurVer)
+		if err != nil {
+			log.Warnf("Failed to parse CurVer '%s': %s", d.CurVer, err)
+			d.IsUpdateAvailable = false
+			return
+		}
+
+		v2, err := version.NewVersion(d.LatestVer)
+		if err != nil {
+			log.Warnf("Failed to parse LatestVer '%s': %s", d.LatestVer, err)
+			d.IsUpdateAvailable = false
+			return
+		}
+		
+		// THIS IS THE CORE FIX: Set the boolean flag for the UI
+		if v2.GreaterThan(v1) {
+			d.IsUpdateAvailable = true
+			log.Infof("Newer Helm Dashboard version is available: %s", d.LatestVer)
 		} else {
-			log.Debugf("Got latest version from GH: %s", d.LatestVer)
+			d.IsUpdateAvailable = false
+			log.Debugf("Got latest version from GH: %s. You are up to date.", d.LatestVer)
 		}
 	}
+
+	go func() {
+		check() // Run once immediately on startup
+		for range ticker.C {
+			check() // Run on every tick of the ticker
+		}
+	}()
 }
 
 func NewHelmConfig(origSettings *cli.EnvSettings, ns string) (*action.Configuration, error) {
