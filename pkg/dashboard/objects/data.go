@@ -36,11 +36,12 @@ type DataLayer struct {
 }
 
 type StatusInfo struct {
-	CurVer        string
-	LatestVer     string
-	Analytics     bool
-	CacheHitRatio float64
-	ClusterMode   bool
+	CurVer            string
+	LatestVer         string
+	IsUpdateAvailable bool `json:"isUpdateAvailable"` // <<< ADD THIS LINE
+	Analytics         bool
+	CacheHitRatio     float64
+	ClusterMode       bool
 }
 
 func NewDataLayer(ns []string, ver string, cg HelmConfigGetter, devel bool) (*DataLayer, error) {
